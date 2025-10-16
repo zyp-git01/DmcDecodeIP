@@ -87,6 +87,7 @@ wire judge_result_bigger_zero = !judge_result[CDNS_ASYNC_FIFO_DATA_W] && |judge_
 logic [7:0] judge_update_cnt;
 
 wire reset_n_period = reset_n && receive_line_rst_n;
+
 always @(posedge clk_i or negedge reset_n_period) begin
     if (!reset_n_period) begin
         state <= st_idle;
@@ -191,10 +192,20 @@ end
 always @(posedge clk_48K or negedge reset_n) begin
     if (!reset_n)
         judge_update_cnt <= 'd1;
-    else if ( judge_update_cnt == JUDGE_UPDATE_THRESHOLD )
+    else if ( judge_update_cnt == JUDGE_UPDATE_THRESHOLD )//judge_update_cnt is equal to JUDGE_UPDATE_THRESHOLD
         judge_update_cnt <= 'd1;
-    else if ( |JUDGE_UPDATE_THRESHOLD )
+    else if ( |JUDGE_UPDATE_THRESHOLD )//JUDGE_UPDATE_THRESHOLD is not zero
         judge_update_cnt <= judge_update_cnt + 'd1;
+end
+
+logic [CDNS_ASYNC_FIFO_DATA_W+2:0] data_sum;
+logic [5:0] data_o_dly;//data_o's delay
+always @(posedge clk_or_data or reset_n_period) begin
+    if (!reset_n_period)
+        data_o_dly <= '0;
+    else if ( data_vld && ( data_o_dly != 6'b001100 ) )
+        data_o_dly <= {data_o_dly[4:0],data_o};
+    else if (  )
 end
 
 always @(posedge clk_48K or negedge reset_n) begin
