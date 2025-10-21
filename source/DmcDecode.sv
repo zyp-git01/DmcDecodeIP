@@ -13,13 +13,18 @@ module DmcDecode #(
 
     input signed [CDNS_ASYNC_FIFO_DATA_W:0] REG_TEN_JUDGE,//will be connected to {1'b0,REG_TEN_JUDGE}
     input signed [CDNS_ASYNC_FIFO_DATA_W:0] REG_FIF_JUDGE,//will be connected to {1'b0,REG_FIF_JUDGE} , FIF is fifteen
-    input signed [CDNS_ASYNC_FIFO_DATA_W:0] REG_TEN_JUDGE_MARGIN,//will be connected to {1'b0,REG_TEN_JUDGE_MARGIN}
+    input signed [CDNS_ASYNC_FIFO_DATA_W:0] REG_FIF_JUDGE_MARGIN,//will be connected to {1'b0,REG_FIF_JUDGE_MARGIN}
+
+    input                                   REG_JUDGE_SEL,//from Efuse
 
     input [3:0]                             DCTR_M,//from 
 
     input [4:0]                             ASYNC_FIFO_THRESHOLD,
     input [7:0]                             JUDGE_UPDATE_THRESHOLD,
 
+    input                                   tdc_sum_vld_for_ten,//from DeScrambleDeMux
+    input                                   tdc_sum_vld_for_fif,//from DeScrambleDeMux
+    input                                   preamble_double_check,//from DeScrambleDeMux
 
     input [CDNS_ASYNC_FIFO_ADDR_W:0]        async_fifo_pop_size,//from async-fifo
     input                                   async_fifo_pop_empty,//from async-fifo
@@ -76,11 +81,16 @@ logic signed [CDNS_ASYNC_FIFO_DATA_W+2:0] data_sum_d;//data_sum will
 
 
 logic signed [CDNS_ASYNC_FIFO_DATA_W:0] ten_judge;
+logic signed [CDNS_ASYNC_FIFO_DATA_W:0] fif_judge;
+logic signed [CDNS_ASYNC_FIFO_DATA_W:0] ten_judge_cal;
+logic signed [CDNS_ASYNC_FIFO_DATA_W:0] fif_judge_cal;
 logic signed [CDNS_ASYNC_FIFO_DATA_W:0] long_judge;
 logic signed [CDNS_ASYNC_FIFO_DATA_W:0] short_judge;
 
+logic judge_sel;
+
 logic signed [CDNS_ASYNC_FIFO_DATA_W:0] judge_result_temp;
-wire signed [CDNS_ASYNC_FIFO_DATA_W:0] judge_result = ( async_fifo_pop_valid ? async_fifo_popd_data : judge_result_temp ) - ( async_fifo_pop_valid ? ( state[1] || state[0] ? short_judge : ( REG_DFE_SEL ? long_judge : short_judge ) ) : 
+wire signed [CDNS_ASYNC_FIFO_DATA_W:0] judge_result = ( async_fifo_pop_valid ? async_fifo_popd_data : judge_result_temp ) - ( async_fifo_pop_valid ? ( state[1] ? short_judge : ( REG_DFE_SEL ? long_judge : short_judge ) ) : 
                                                                                                                                                      ten_judge );
 wire judge_result_bigger_zero = !judge_result[CDNS_ASYNC_FIFO_DATA_W] && |judge_result;//judge_result > 0
 
@@ -188,35 +198,67 @@ always @(posedge clk_i or negedge reset_n_period) begin
         async_fifo_clr <= 1'b1;
 end
 
-
+//only detect the "10101100" , can update judge_update_cnt
 always @(posedge clk_48K or negedge reset_n) begin
     if (!reset_n)
         judge_update_cnt <= 'd1;
     else if ( judge_update_cnt == JUDGE_UPDATE_THRESHOLD )//judge_update_cnt is equal to JUDGE_UPDATE_THRESHOLD
         judge_update_cnt <= 'd1;
-    else if ( |JUDGE_UPDATE_THRESHOLD )//JUDGE_UPDATE_THRESHOLD is not zero
+    else if ( (|JUDGE_UPDATE_THRESHOLD) && preamble_double_check )//JUDGE_UPDATE_THRESHOLD is not zero
         judge_update_cnt <= judge_update_cnt + 'd1;
 end
 
-logic [CDNS_ASYNC_FIFO_DATA_W+2:0] data_sum;
-logic [5:0] data_o_dly;//data_o's delay
-always @(posedge clk_or_data or reset_n_period) begin
-    if (!reset_n_period)
-        data_o_dly <= '0;
-    else if ( data_vld && ( data_o_dly != 6'b001100 ) )
-        data_o_dly <= {data_o_dly[4:0],data_o};
-    else if (  )
-end
+logic [CDNS_ASYNC_FIFO_DATA_W+2:0] data_sum_for_ten_judge;
+logic [CDNS_ASYNC_FIFO_DATA_W+2:0] data_sum_for_fif_judge;//sum the of "110010" "1010110010"
 
-always @(posedge clk_48K or negedge reset_n) begin
+always @(posedge clk_or_data or negedge reset_n) begin
     if (!reset_n)
-        ten_judge <= 'd1;
-    else if ( judge_update_cnt == JUDGE_UPDATE_THRESHOLD )
-        ten_judge <= 'd1;
-    else if ( |JUDGE_UPDATE_THRESHOLD )
-        ten_judge <= ten_judge + 'd1;
+        data_sum_for_ten_judge <= '0;
+    else if ( async_fifo_pop_empty )//state == st_idle
+        data_sum_for_ten_judge <= '0;
+    else if ( tdc_sum_vld_for_ten )
+        data_sum_for_ten_judge <= data_sum_for_ten_judge + {2'b00,async_fifo_popd_data};
 end
 
+always @(posedge clk_or_data or negedge reset_n) begin
+    if (!reset_n)
+        data_sum_for_fif_judge <= '0;
+    else if ( async_fifo_pop_empty )//state == st_idle
+        data_sum_for_fif_judge <= '0;
+    else if ( tdc_sum_vld_for_fif )
+        data_sum_for_fif_judge <= data_sum_for_fif_judge + {2'b00,async_fifo_popd_data};
+end
+
+always @(posedge clk_or_data or negedge reset_n) begin
+    if (!reset_n)
+        judge_sel <= 1'b0;
+    else if ( REG_JUDGE_SEL )
+        judge_sel <= 1'b0;
+    else if ( !receive_line_rst_n && ( judge_update_cnt == JUDGE_UPDATE_THRESHOLD ) )
+        judge_sel <= 1'b1;
+end
+
+always @(posedge clk_or_data or negedge reset_n) begin
+    if (!reset_n)
+        ten_judge_cal <= 'd1;
+    else if ( !judge_sel )
+        ten_judge_cal <= REG_TEN_JUDGE;
+    else if ( ( judge_update_cnt == JUDGE_UPDATE_THRESHOLD ) && async_fifo_pop_empty )
+        ten_judge_cal <= data_sum_for_ten_judge[CDNS_ASYNC_FIFO_DATA_W+2:2];
+end
+
+always @(posedge clk_or_data or negedge reset_n) begin
+    if (!reset_n)
+        fif_judge_cal <= 'd1;//fifteen judge
+    else if ( !judge_sel )
+        fif_judge_cal <= REG_FIF_JUDGE;
+    else if ( ( judge_update_cnt == JUDGE_UPDATE_THRESHOLD ) && async_fifo_pop_empty )
+        fif_judge_cal <= data_sum_for_fif_judge[CDNS_ASYNC_FIFO_DATA_W+2:2];
+end
+
+assign ten_judge = judge_sel ? ten_judge_cal : REG_TEN_JUDGE;
+assign short_judge = judge_sel ? fif_judge_cal : REG_FIF_JUDGE;
+assign long_judge = judge_sel ? fif_judge_cal + REG_FIF_JUDGE_MARGIN : REG_FIF_JUDGE;
 
 generate
     if ( FPGA == 1 ) begin
