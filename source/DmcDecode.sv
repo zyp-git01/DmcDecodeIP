@@ -11,16 +11,18 @@ module DmcDecode #(
     input                                   reset_n,//connect to (reset_n && pll_lock)
     input                                   receive_line_rst_n,
 
-    input signed [CDNS_ASYNC_FIFO_DATA_W:0] REG_TEN_JUDGE,//will be connected to {1'b0,REG_TEN_JUDGE}
-    input signed [CDNS_ASYNC_FIFO_DATA_W:0] REG_FIF_JUDGE,//will be connected to {1'b0,REG_FIF_JUDGE} , FIF is fifteen
-    input signed [CDNS_ASYNC_FIFO_DATA_W:0] REG_FIF_JUDGE_MARGIN,//will be connected to {1'b0,REG_FIF_JUDGE_MARGIN}
+    input signed [CDNS_ASYNC_FIFO_DATA_W:0] REG_TEN_JUDGE,//will be connected to {1'b0,REG_TEN_JUDGE} , Efuse
+    input signed [CDNS_ASYNC_FIFO_DATA_W:0] REG_FIF_JUDGE,//will be connected to {1'b0,REG_FIF_JUDGE} , FIF is fifteen , Efuse
+    input signed [CDNS_ASYNC_FIFO_DATA_W:0] REG_FIF_JUDGE_MARGIN,//will be connected to {1'b0,REG_FIF_JUDGE_MARGIN} , Efuse
+    input signed [CDNS_ASYNC_FIFO_DATA_W:0] REG_TEN_JUDGE_CAL_THRESHOLD,//will be connected to {1'b0,REG_TEN_JUDGE_CAL_THRESHOLD} , Efuse
+    input signed [CDNS_ASYNC_FIFO_DATA_W:0] REG_FIF_JUDGE_CAL_THRESHOLD,//will be connected to {1'b0,REG_FIF_JUDGE_CAL_THRESHOLD} , Efuse
 
     input                                   REG_JUDGE_SEL,//from Efuse
 
     input [3:0]                             DCTR_M,//from 
 
-    input [4:0]                             ASYNC_FIFO_THRESHOLD,
-    input [7:0]                             JUDGE_UPDATE_THRESHOLD,
+    input [4:0]                             ASYNC_FIFO_THRESHOLD,//Efuse
+    input [7:0]                             JUDGE_UPDATE_THRESHOLD,//Efuse
 
     input                                   tdc_sum_vld_for_ten,//from DeScrambleDeMux
     input                                   tdc_sum_vld_for_fif,//from DeScrambleDeMux
@@ -73,24 +75,21 @@ enum logic [3:0] { st_idle = 4'b0001,
                    st_long_edge = 4'b0100,
                    st_done = 4'b1000 } state;
 
-logic [5:0] async_fifo_pop_empty_d;
+logic [5:0] async_fifo_pop_empty_R;
 logic       async_fifo_pop_valid;
-
-logic signed [CDNS_ASYNC_FIFO_DATA_W+2:0] data_sum;//data_sum will 
-logic signed [CDNS_ASYNC_FIFO_DATA_W+2:0] data_sum_d;//data_sum will 
+logic       receive_line_rst_n_R;
 
 
 logic signed [CDNS_ASYNC_FIFO_DATA_W:0] ten_judge;
-logic signed [CDNS_ASYNC_FIFO_DATA_W:0] fif_judge;
 logic signed [CDNS_ASYNC_FIFO_DATA_W:0] ten_judge_cal;
 logic signed [CDNS_ASYNC_FIFO_DATA_W:0] fif_judge_cal;
-logic signed [CDNS_ASYNC_FIFO_DATA_W:0] long_judge;
-logic signed [CDNS_ASYNC_FIFO_DATA_W:0] short_judge;
+logic signed [CDNS_ASYNC_FIFO_DATA_W:0] fif_long_judge;
+logic signed [CDNS_ASYNC_FIFO_DATA_W:0] fif_short_judge;
 
 logic judge_sel;
 
-logic signed [CDNS_ASYNC_FIFO_DATA_W:0] judge_result_temp;
-wire signed [CDNS_ASYNC_FIFO_DATA_W:0] judge_result = ( async_fifo_pop_valid ? async_fifo_popd_data : judge_result_temp ) - ( async_fifo_pop_valid ? ( state[1] ? short_judge : ( REG_DFE_SEL ? long_judge : short_judge ) ) : 
+logic signed [CDNS_ASYNC_FIFO_DATA_W:0] judge_result_R;
+wire signed [CDNS_ASYNC_FIFO_DATA_W:0] judge_result = ( async_fifo_pop_valid ? async_fifo_popd_data : judge_result_R ) - ( async_fifo_pop_valid ? ( state[1] ? fif_short_judge : ( REG_DFE_SEL ? fif_long_judge : fif_short_judge ) ) : 
                                                                                                                                                      ten_judge );
 wire judge_result_bigger_zero = !judge_result[CDNS_ASYNC_FIFO_DATA_W] && |judge_result;//judge_result > 0
 
@@ -175,17 +174,17 @@ end
 
 always @(posedge clk_i or negedge reset_n_period) begin
     if (!reset_n_period)
-        judge_result_temp <= '0;
+        judge_result_R <= '0;
     else 
-        judge_result_temp <= judge_result;
+        judge_result_R <= judge_result;
 end
 
 
 always @(posedge clk_i or negedge reset_n_period) begin
     if (!reset_n_period)
-        async_fifo_pop_empty_d <= {6{1'b1}};
+        async_fifo_pop_empty_R <= {6{1'b1}};
     else 
-        async_fifo_pop_empty_d <= {async_fifo_pop_empty_d[4:0],async_fifo_pop_empty};
+        async_fifo_pop_empty_R <= {async_fifo_pop_empty_R[4:0],async_fifo_pop_empty};
 end
 
 
@@ -194,7 +193,7 @@ always @(posedge clk_i or negedge reset_n_period) begin
         async_fifo_clr <= 1'b0;
     else if ( async_fifo_pop_empty )
         async_fifo_clr <= 1'b0;
-    else if ( !(|async_fifo_pop_empty_d) && |async_fifo_pop_size[1:0] && !(|async_fifo_pop_size[CDNS_ASYNC_FIFO_ADDR_W:2]) && state[0] )//state == st_wait
+    else if ( !(|async_fifo_pop_empty_R) && |async_fifo_pop_size[1:0] && !(|async_fifo_pop_size[CDNS_ASYNC_FIFO_ADDR_W:2]) && state[0] )//state == st_idle
         async_fifo_clr <= 1'b1;
 end
 
@@ -202,7 +201,7 @@ end
 always @(posedge clk_48K or negedge reset_n) begin
     if (!reset_n)
         judge_update_cnt <= 'd1;
-    else if ( judge_update_cnt == JUDGE_UPDATE_THRESHOLD )//judge_update_cnt is equal to JUDGE_UPDATE_THRESHOLD
+    else if ( (judge_update_cnt == JUDGE_UPDATE_THRESHOLD) && preamble_double_check )//judge_update_cnt is equal to JUDGE_UPDATE_THRESHOLD
         judge_update_cnt <= 'd1;
     else if ( (|JUDGE_UPDATE_THRESHOLD) && preamble_double_check )//JUDGE_UPDATE_THRESHOLD is not zero
         judge_update_cnt <= judge_update_cnt + 'd1;
@@ -210,11 +209,19 @@ end
 
 logic [CDNS_ASYNC_FIFO_DATA_W+2:0] data_sum_for_ten_judge;
 logic [CDNS_ASYNC_FIFO_DATA_W+2:0] data_sum_for_fif_judge;//sum the of "110010" "1010110010"
+logic                              calculate_judge = ( judge_update_cnt == JUDGE_UPDATE_THRESHOLD ) && ( receive_line_rst_n_R && !receive_line_rst_n );
+
+always @(posedge clk_or_data or negedge reset_n) begin
+    if (!reset_n)
+        receive_line_rst_n_R <= 1'b1;
+    else
+        receive_line_rst_n_R <= receive_line_rst_n;
+end
 
 always @(posedge clk_or_data or negedge reset_n) begin
     if (!reset_n)
         data_sum_for_ten_judge <= '0;
-    else if ( async_fifo_pop_empty )//state == st_idle
+    else if ( calculate_judge )//state == st_idle
         data_sum_for_ten_judge <= '0;
     else if ( tdc_sum_vld_for_ten )
         data_sum_for_ten_judge <= data_sum_for_ten_judge + {2'b00,async_fifo_popd_data};
@@ -223,7 +230,7 @@ end
 always @(posedge clk_or_data or negedge reset_n) begin
     if (!reset_n)
         data_sum_for_fif_judge <= '0;
-    else if ( async_fifo_pop_empty )//state == st_idle
+    else if ( calculate_judge )//state == st_idle
         data_sum_for_fif_judge <= '0;
     else if ( tdc_sum_vld_for_fif )
         data_sum_for_fif_judge <= data_sum_for_fif_judge + {2'b00,async_fifo_popd_data};
@@ -232,7 +239,7 @@ end
 always @(posedge clk_or_data or negedge reset_n) begin
     if (!reset_n)
         judge_sel <= 1'b0;
-    else if ( REG_JUDGE_SEL )
+    else if ( REG_JUDGE_SEL )//if mannually choose REG_JUDGE
         judge_sel <= 1'b0;
     else if ( !receive_line_rst_n && ( judge_update_cnt == JUDGE_UPDATE_THRESHOLD ) )
         judge_sel <= 1'b1;
@@ -241,24 +248,24 @@ end
 always @(posedge clk_or_data or negedge reset_n) begin
     if (!reset_n)
         ten_judge_cal <= 'd1;
-    else if ( !judge_sel )
+    else if ( !judge_sel )//if mannually choose REG_JUDGE or judge_update_cnt != JUDGE_UPDATE_THRESHOLD
         ten_judge_cal <= REG_TEN_JUDGE;
-    else if ( ( judge_update_cnt == JUDGE_UPDATE_THRESHOLD ) && async_fifo_pop_empty )
-        ten_judge_cal <= data_sum_for_ten_judge[CDNS_ASYNC_FIFO_DATA_W+2:2];
+    else if ( calculate_judge )
+        ten_judge_cal <= ( data_sum_for_ten_judge[CDNS_ASYNC_FIFO_DATA_W+2:2] < ten_judge_cal - REG_TEN_JUDGE_CAL_THRESHOLD ) || ( data_sum_for_ten_judge[CDNS_ASYNC_FIFO_DATA_W+2:2] > ten_judge_cal + REG_TEN_JUDGE_CAL_THRESHOLD ) ? ten_judge_cal : data_sum_for_ten_judge[CDNS_ASYNC_FIFO_DATA_W+2:2];//set multicycle path from data_sum_for_ten_judge to ten_judge_cal
 end
 
 always @(posedge clk_or_data or negedge reset_n) begin
     if (!reset_n)
         fif_judge_cal <= 'd1;//fifteen judge
-    else if ( !judge_sel )
+    else if ( !judge_sel )//if mannually choose REG_JUDGE or judge_update_cnt != JUDGE_UPDATE_THRESHOLD
         fif_judge_cal <= REG_FIF_JUDGE;
-    else if ( ( judge_update_cnt == JUDGE_UPDATE_THRESHOLD ) && async_fifo_pop_empty )
-        fif_judge_cal <= data_sum_for_fif_judge[CDNS_ASYNC_FIFO_DATA_W+2:2];
+    else if ( calculate_judge )
+        fif_judge_cal <= ( data_sum_for_fif_judge[CDNS_ASYNC_FIFO_DATA_W+2:2] < fif_judge_cal - REG_FIF_JUDGE_CAL_THRESHOLD ) || ( data_sum_for_fif_judge[CDNS_ASYNC_FIFO_DATA_W+2:2] > fif_judge_cal + REG_FIF_JUDGE_CAL_THRESHOLD ) ? fif_judge_cal : data_sum_for_fif_judge[CDNS_ASYNC_FIFO_DATA_W+2:2];//set multicycle path from data_sum_for_fif_judge to fif_judge_cal
 end
 
 assign ten_judge = judge_sel ? ten_judge_cal : REG_TEN_JUDGE;
-assign short_judge = judge_sel ? fif_judge_cal : REG_FIF_JUDGE;
-assign long_judge = judge_sel ? fif_judge_cal + REG_FIF_JUDGE_MARGIN : REG_FIF_JUDGE;
+assign fif_short_judge = judge_sel ? fif_judge_cal : REG_FIF_JUDGE;
+assign fif_long_judge = judge_sel ? fif_judge_cal + REG_FIF_JUDGE_MARGIN : REG_FIF_JUDGE;
 
 generate
     if ( FPGA == 1 ) begin
@@ -272,10 +279,10 @@ endgenerate
 always @(*) begin
     case (dbg_bus_sub_module_sel)
         4'd0 : dbg_bus_from_DmcDecode = { 1'b0, TDC_OFFSET, ten_judge};
-        4'd1 : dbg_bus_from_DmcDecode = { 1'b0, short_judge, long_judge};
-        4'd2 : dbg_bus_from_DmcDecode = { 1'b0, judge_result_temp, judge_result};
+        4'd1 : dbg_bus_from_DmcDecode = { 1'b0, fif_short_judge, fif_long_judge};
+        4'd2 : dbg_bus_from_DmcDecode = { 1'b0, judge_result_R, judge_result};
         4'd3 : dbg_bus_from_DmcDecode = {{(13-CDNS_ASYNC_FIFO_DATA_W-3){1'b0}}, data_sum};
-        4'd4 : dbg_bus_from_DmcDecode = {{(13-CDNS_ASYNC_FIFO_DATA_W-3){1'b0}}, data_sum_d};
+        4'd4 : dbg_bus_from_DmcDecode = '0;
         4'd5 : dbg_bus_from_DmcDecode = {clk_i, clk_or_data, enable, reset_n, data_o, sync_o, data_vld, early_receive_done};
         4'd6 : dbg_bus_from_DmcDecode = {2'b00, async_fifo_pop_en, pop_cnt, async_fifo_pop_empty, async_fifo_clr, async_fifo_pop_size};
         4'd7 : dbg_bus_from_DmcDecode = {2'b00, judge_result_bigger_zero, async_fifo_pop_en, data_o, sync_o, data_vld, async_fifo_popd_data};
