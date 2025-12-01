@@ -462,22 +462,15 @@ logic [5:0] async_fifo_pop_empty_R;
 logic       async_fifo_pop_valid;
 logic       data_o_fix_short;
 
-logic [7:0]                             scf_judge_update_cnt;
-logic [7:0]                             srf_judge_update_cnt;
-logic [CDNS_ASYNC_FIFO_DATA_W+2:0]      data_sum_for_ten_judge;
-logic [CDNS_ASYNC_FIFO_DATA_W+2:0]      data_sum_for_fif_judge;//sum the of "110010" "1010110010"
 
 logic signed [CDNS_ASYNC_FIFO_DATA_W:0] ten_judge;
 logic signed [CDNS_ASYNC_FIFO_DATA_W:0] fif_long_judge;
 logic signed [CDNS_ASYNC_FIFO_DATA_W:0] fif_short_judge;
 
-logic scf_judge_sel;
-logic srf_judge_sel;
+logic signed [CDNS_ASYNC_FIFO_DATA_W+2:0] judge_result_R;
+wire signed [CDNS_ASYNC_FIFO_DATA_W+2:0] judge_result = ( async_fifo_pop_valid ? {2'b0,async_fifo_popd_data} + {2'b0,async_fifo_popd_data_R} : judge_result_R ) - ( async_fifo_pop_valid ? {ten_judge,1'b0} : {2'b0,ten_judge} + {2'b0,TDC_OFFSET} ) ;
 
-logic signed [CDNS_ASYNC_FIFO_DATA_W+1:0] judge_result_R;
-wire signed [CDNS_ASYNC_FIFO_DATA_W+1:0] judge_result = ( async_fifo_pop_valid ? {1'b0,async_fifo_popd_data} + {1'b0,async_fifo_popd_data_R} : judge_result_R ) - ( async_fifo_pop_valid ? {ten_judge,1'b0} : {1'b0,ten_judge} + {1'b0,TDC_OFFSET} ) ;
-
-wire first_data_is_short = async_fifo_popd_data_R < async_fifo_popd_data;
+wire first_data_bigger_twelve = async_fifo_popd_data_R > ten_judge;
 
 wire judge_result_bigger_twelve = judge_result > ( ten_judge + TDC_OFFSET );
 
@@ -506,13 +499,18 @@ always @(posedge clk_i or negedge reset_n_period) begin
                 if ( !clk_or_data ) begin
                     if ( data_o_fix_short )
                         data_o <= #(clk_i_delay) 1'b0;
-                    else if ( judge_result_bigger_twelve && async_fifo_pop_valid )//which means first_data_is long , whatever is sync or just 1'b1
-                        data_o <= #(clk_i_delay) 1'b1;
-                    else if ( first_data_is_short )//first_data_is_short == 1 && judge_result < twelve
-                        data_o <= #(clk_i_delay) 1'b0;
+                    else if ( async_fifo_pop_valid ) begin
+                        if ( first_data_relative_small )//first_data_relative_small == 1 && judge_result < twelve
+                            data_o <= #(clk_i_delay) 1'b0;
+                        else if ( judge_result_bigger_twelve )//which means first_data_is long , whatever is sync or just 1'b1
+                            data_o <= #(clk_i_delay) 1'b1;
+                    end
+                    
 
-                    if ( !judge_result_bigger_twelve && first_data_is_short )
+                    if ( !judge_result_bigger_twelve && first_data_relative_small )
                         sync_o <= #(clk_i_delay) 1'b1;
+                    else if ( !judge_result_bigger_twelve && !first_data_relative_small )
+
                     else 
                         sync_o <= #(clk_i_delay) 1'b0;
                 end 
@@ -535,8 +533,8 @@ always @(posedge clk_i or negedge reset_n_period) begin
     else if ( clk_or_data ) begin
         if ( sync_o )
             async_fifo_popd_data_R <= '0;
-        else
-            async_fifo_popd_data_R <= '0;
+        else if (  )
+            async_fifo_popd_data_R <= async_fifo_popd_data;
     end
 end
 
